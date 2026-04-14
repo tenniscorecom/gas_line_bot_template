@@ -1,0 +1,2 @@
+# gas_line_bot_template
+コマンド形式で機能を追加できるようにする
