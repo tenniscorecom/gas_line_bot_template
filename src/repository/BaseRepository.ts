@@ -8,57 +8,37 @@ abstract class BaseRepository {
 
   constructor(sheetName: string) {
     const config = Config.get();
-    const ss = SpreadsheetApp.openById(config.spreadsheetId);
-    const sheet = ss.getSheetByName(sheetName);
+    const ss     = SpreadsheetApp.openById(config.spreadsheetId);
+    const sheet  = ss.getSheetByName(sheetName);
 
     if (!sheet) {
       throw new Error(
         `[BaseRepository] シート "${sheetName}" が見つかりません。` +
-          "スプレッドシートにシートを作成してください。"
+        "setupSpreadsheet() を実行してシートを作成してください。"
       );
     }
-
     this.sheet = sheet;
   }
 
   // ----------------------------------------------------------
-  // 共通 CRUD ヘルパー
+  // 読み取り
   // ----------------------------------------------------------
 
-  /** 全行を取得（ヘッダー行を除く） */
+  /** ヘッダー行を除いた全行を返す */
   protected getAllRows(): SheetRow[] {
     const lastRow = this.sheet.getLastRow();
-    if (lastRow <= 1) return []; // ヘッダーのみ or 空
-
-    const data = this.sheet
+    if (lastRow <= 1) return [];
+    return this.sheet
       .getRange(2, 1, lastRow - 1, this.sheet.getLastColumn())
-      .getValues();
-
-    return data as SheetRow[];
-  }
-
-  /** 行を追加 */
-  protected appendRow(row: SheetRow): void {
-    this.sheet.appendRow(row);
-  }
-
-  /** 指定行番号（1-indexed、ヘッダー込み）を更新 */
-  protected updateRow(rowIndex: number, row: SheetRow): void {
-    this.sheet
-      .getRange(rowIndex, 1, 1, row.length)
-      .setValues([row]);
-  }
-
-  /** 指定行番号（1-indexed）を削除 */
-  protected deleteRow(rowIndex: number): void {
-    this.sheet.deleteRow(rowIndex);
+      .getValues() as SheetRow[];
   }
 
   /**
-   * 特定カラム（1-indexed）でキー検索し、最初にマッチした行番号を返す
-   * @returns ヒットした行番号（ヘッダー込み 1-indexed）。未ヒットは -1
+   * 指定カラム（1-indexed）の値で行を検索し、
+   * 最初にマッチした行番号（ヘッダー込み 1-indexed）を返す。
+   * 見つからない場合は -1。
    */
-  protected findRowIndexByColumn(columnIndex: number, value: string): number {
+  protected findRowIndex(columnIndex: number, value: string): number {
     const lastRow = this.sheet.getLastRow();
     if (lastRow <= 1) return -1;
 
@@ -67,24 +47,60 @@ abstract class BaseRepository {
       .getValues();
 
     for (let i = 0; i < values.length; i++) {
-      if (String(values[i][0]) === value) {
-        return i + 2; // +2 = ヘッダー行分のオフセット
-      }
+      if (String(values[i][0]) === value) return i + 2;
     }
-
     return -1;
   }
 
-  /** 日付を "YYYY-MM-DD HH:mm:ss" 形式の文字列に変換 */
-  protected formatDate(date: Date = new Date()): string {
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return (
-      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-      ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  /** 指定カラムの値でマッチする全行を返す */
+  protected findAllRowsByColumn(columnIndex: number, value: string): SheetRow[] {
+    return this.getAllRows().filter(
+      (row) => String(row[columnIndex - 1]) === value
     );
   }
 
-  /** UUID 風のユニークIDを生成 */
+  // ----------------------------------------------------------
+  // 書き込み
+  // ----------------------------------------------------------
+
+  protected appendRow(row: SheetRow): void {
+    this.sheet.appendRow(row);
+  }
+
+  protected updateRow(rowIndex: number, row: SheetRow): void {
+    this.sheet.getRange(rowIndex, 1, 1, row.length).setValues([row]);
+  }
+
+  // ----------------------------------------------------------
+  // ユーティリティ
+  // ----------------------------------------------------------
+
+  /** 現在の最終行番号を返す（ログID生成に使用） */
+  protected getLastRow(): number {
+    return this.sheet.getLastRow();
+  }
+
+  /**
+   * 現在日時を "yyyy-MM-dd HH:mm:ss" 形式（Asia/Tokyo）で返す
+   */
+  protected now(): string {
+    return Utilities.formatDate(
+      new Date(),
+      "Asia/Tokyo",
+      "yyyy-MM-dd HH:mm:ss"
+    );
+  }
+
+  /**
+   * n日後の日時を "yyyy-MM-dd HH:mm:ss" 形式（Asia/Tokyo）で返す
+   */
+  protected addDays(days: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return Utilities.formatDate(d, "Asia/Tokyo", "yyyy-MM-dd HH:mm:ss");
+  }
+
+  /** UUID を生成する */
   protected generateId(): string {
     return Utilities.getUuid();
   }

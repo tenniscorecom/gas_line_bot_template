@@ -6,7 +6,6 @@
 class FollowController {
   private static readonly userService = new UserService();
 
-  /** フォローイベントのエントリーポイント */
   static handleFollow(event: LineFollowEvent): void {
     const userId = event.source.userId;
     if (!userId) return;
@@ -16,42 +15,42 @@ class FollowController {
 
     ReplyService.replyText(
       event.replyToken,
-      `${user.displayName} さん、フォローありがとうございます！🎉\n\n/help でコマンド一覧を確認できます。`
+      [
+        `${user.displayName} さん、フォローありがとうございます！🎉`,
+        ``,
+        `あなたのお客様番号: ${user.shortId}`,
+        ``,
+        `/help でコマンド一覧を確認できます。`,
+      ].join("\n")
     );
   }
 
-  /** アンフォローイベントのエントリーポイント（返信不可） */
   static handleUnfollow(event: LineUnfollowEvent): void {
     const userId = event.source.userId;
     AppLogger.info("[FollowController] アンフォロー", { userId });
-    // アンフォロー時は replyToken がないため返信不可
-    // 必要であればここでDBのフラグを更新するなどの処理を行う
   }
 }
 
 // =============================================================
 // src/controller/PostbackController.ts
 // ポストバックイベントのコントローラー
+// data 形式: "action=xxx&key=value&..."
 // =============================================================
 
 class PostbackController {
-  /**
-   * ポストバックイベントのエントリーポイント
-   * data 形式: "action=xxx&param=yyy" を想定
-   */
   static handle(event: LinePostbackEvent): void {
-    const data = event.postback.data;
-    AppLogger.info("[PostbackController] ポストバック受信", { data });
-
+    const data   = event.postback.data;
     const params = this.parsePostbackData(data);
     const action = params["action"] ?? "";
 
+    AppLogger.info("[PostbackController] ポストバック受信", { action, params });
+
     switch (action) {
+      case "ticket_issue":
+        this.handleTicketIssue(event, params);
+        break;
       case "ticket_use":
         this.handleTicketUse(event, params);
-        break;
-      case "ticket_check":
-        this.handleTicketCheck(event);
         break;
       default:
         AppLogger.warn("[PostbackController] 未知のアクション", { action });
@@ -60,34 +59,64 @@ class PostbackController {
   }
 
   // ----------------------------------------------------------
-  // Private handlers
+  // ticket_issue: 管理者がプランを選択してチケット発行
+  // ----------------------------------------------------------
+
+  private static handleTicketIssue(
+    event: LinePostbackEvent,
+    params: Record<string, string>
+  ): void {
+    const shortId  = params["shortId"]  ?? "";
+    const planKey  = params["planKey"]  as TicketPlanKey;
+
+    if (!shortId || !planKey || !TICKET_PLANS[planKey]) {
+      ReplyService.replyText(event.replyToken, "パラメータが不正です。");
+      return;
+    }
+
+    const ticketService = new TicketService();
+    const userRepo      = new UserRepository();
+
+    const ticket = ticketService.issueByShortId(shortId, planKey);
+    if (!ticket) {
+      ReplyService.replyText(
+        event.replyToken,
+        `ショートID「${shortId}」のユーザーが見つかりません。`
+      );
+      return;
+    }
+
+    const user = userRepo.findByShortId(shortId);
+    if (!user) return;
+
+    const message = ticketService.buildIssueResultMessage(ticket, user);
+    ReplyService.replyText(event.replyToken, message);
+  }
+
+  // ----------------------------------------------------------
+  // ticket_use: ユーザーがチケットを選択して使用
   // ----------------------------------------------------------
 
   private static handleTicketUse(
     event: LinePostbackEvent,
     params: Record<string, string>
   ): void {
-    const userId = event.source.userId;
-    if (!userId) return;
-
+    const userId   = event.source.userId;
     const ticketId = params["ticketId"] ?? "";
+
+    if (!userId || !ticketId) {
+      ReplyService.replyText(event.replyToken, "パラメータが不正です。");
+      return;
+    }
+
     const result = new TicketService().use(userId, ticketId);
     ReplyService.replyText(event.replyToken, result);
   }
 
-  private static handleTicketCheck(event: LinePostbackEvent): void {
-    const userId = event.source.userId;
-    if (!userId) return;
-
-    const result = new TicketService().check(userId);
-    ReplyService.replyText(event.replyToken, result);
-  }
-
   // ----------------------------------------------------------
-  // Helpers
+  // ヘルパー
   // ----------------------------------------------------------
 
-  /** "key=value&key2=value2" を Record に変換 */
   private static parsePostbackData(data: string): Record<string, string> {
     const result: Record<string, string> = {};
     data.split("&").forEach((pair) => {

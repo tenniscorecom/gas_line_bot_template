@@ -1,21 +1,33 @@
 // =============================================================
-// src/command/commands/ShopCommand.ts
-// /shop コマンド（新規コマンド追加のサンプル）
-//
-// ★ このファイルを追加して Main.ts に new ShopCommand() を
-//    1行追加するだけで /shop コマンドが動作します。
+// src/command/BaseCommand.ts
+// コマンドの基底クラス
+// 継承してインスタンス化するだけで CommandRegistry に自動登録される
 // =============================================================
 
-class ShopCommand extends BaseCommand {
-  readonly name = "shop";
-  readonly description = "/shop - ショップを開く";
-  readonly requiresAdmin = false;
+abstract class BaseCommand {
+  /**
+   * コマンド名（スラッシュなし・小文字）
+   * 例: "ticket", "admin", "help"
+   */
+  abstract readonly name: string;
 
-  execute(event: LineMessageEvent, _args: string[]): void {
-    // 実際のロジックはここに実装する
-    ReplyService.replyText(
-      event.replyToken,
-      "🛍️ ショップへようこそ！\n現在準備中です。"
-    );
-  }
+  /**
+   * ヘルプに表示するコマンド説明
+   * 例: "/ticket use <ID> - チケットを使用する"
+   */
+  abstract readonly description: string;
+
+  /**
+   * コマンドの実行エントリーポイント
+   * @param event LINE メッセージイベント
+   * @param args  コマンド名以降のトークン列
+   *              例: "/ticket use ABC" → args = ["use", "ABC"]
+   */
+  abstract execute(event: LineMessageEvent, args: string[]): void;
+
+  /**
+   * 管理者専用コマンドかどうか
+   * true の場合、TextController が実行前に権限チェックを行う
+   */
+  readonly requiresAdmin: boolean = false;
 }

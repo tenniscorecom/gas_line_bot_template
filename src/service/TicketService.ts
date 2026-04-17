@@ -1,82 +1,136 @@
 // =============================================================
 // src/service/TicketService.ts
-// チケットに関するビジネスロジック
+// チケットのビジネスロジック
+//
+// セット更新の責務はここに集約する:
+//   tickets の更新   → ticketRepo
+//   ticket_logs の記録 → logRepo
+//   この2つは必ずセットで呼ぶ
 // =============================================================
 
 class TicketService {
   private ticketRepo: TicketRepository;
-  private userService: UserService;
+  private logRepo:    TicketLogRepository;
 
   constructor() {
     this.ticketRepo = new TicketRepository();
-    this.userService = new UserService();
+    this.logRepo    = new TicketLogRepository();
   }
 
   // ----------------------------------------------------------
-  // Public API
+  // use: チケットを1回使用する
   // ----------------------------------------------------------
 
   /**
-   * チケットを1枚発行する
+   * 有効チケットを1回消費する
+   * @throws 有効チケットがない場合
    */
-  issue(userId: string): string {
-    // ユーザーが存在することを保証
-    this.userService.ensureUser(userId);
-    const ticket = this.ticketRepo.issue(userId);
-    return `チケットを発行しました 🎫\nチケットID: ${ticket.ticketId.slice(0, 8).toUpperCase()}`;
-  }
+  use(userId: string): TicketUseResult {
+    const ticket = this.ticketRepo.findActiveTicket(userId);
 
-  /**
-   * チケットを使用する
-   * @param userId  操作ユーザー
-   * @param ticketIdPrefix チケットID先頭8文字（または完全ID）
-   */
-  use(userId: string, ticketIdPrefix: string): string {
-    const tickets = this.ticketRepo.findUnusedByUserId(userId);
+    if (!ticket) {
+      throw new Error("有効なチケットがありません。");
+    }
 
-    // 先頭文字列でマッチング
-    const target = tickets.find((t) =>
-      t.ticketId.toUpperCase().startsWith(ticketIdPrefix.toUpperCase())
+    if (ticket.remainingCount <= 0) {
+      throw new Error("チケットの残数が0です。");
+    }
+
+    const remainingAfter = ticket.remainingCount - 1;
+
+    // tickets と ticket_logs を必ずセットで更新
+    this.ticketRepo.updateRemaining(ticket.ticketId, remainingAfter);
+    this.logRepo.writeLog(
+      userId,
+      ticket.ticketId,
+      "use",
+      -1,
+      remainingAfter,
+      "チケット使用"
     );
 
-    if (!target) {
-      return `未使用のチケット "${ticketIdPrefix}" が見つかりません。\n/ticket check で保有チケットを確認してください。`;
-    }
+    AppLogger.info("[TicketService] チケット使用", {
+      userId, ticketId: ticket.ticketId, remainingAfter,
+    });
 
-    const success = this.ticketRepo.use(target.ticketId);
-    if (!success) {
-      return "チケットの使用に失敗しました。すでに使用済みか期限切れです。";
-    }
-
-    return `チケット ${ticketIdPrefix.toUpperCase()} を使用しました ✅`;
+    return { ticket, remainingAfter };
   }
+
+  // ----------------------------------------------------------
+  // add: チケットを付与する
+  // ----------------------------------------------------------
 
   /**
-   * 保有チケット一覧を返す
+   * ユーザーに指定種別のチケットを発行する
+   * @throws 不正な ticket_type の場合
    */
-  check(userId: string): string {
-    const tickets = this.ticketRepo.findByUserId(userId);
-
-    if (tickets.length === 0) {
-      return "チケットを1枚も持っていません。";
+  add(userId: string, type: TicketTypeKey): TicketEntity {
+    if (!TicketTypes[type]) {
+      throw new Error(
+        `不正なチケット種別: "${type}"\n使用可能: ${Object.keys(TicketTypes).join(", ")}`
+      );
     }
 
-    const unused = tickets.filter((t) => t.status === "unused");
-    const used = tickets.filter((t) => t.status === "used");
+    // tickets と ticket_logs を必ずセットで更新
+    const ticket = this.ticketRepo.createTicket(userId, type);
+    this.logRepo.writeLog(
+      userId,
+      ticket.ticketId,
+      "add",
+      ticket.remainingCount,
+      ticket.remainingCount,
+      `チケット発行: ${TicketTypes[type].name}`
+    );
 
-    const lines: string[] = [
-      `🎫 チケット保有状況`,
-      `未使用: ${unused.length}枚 / 使用済み: ${used.length}枚`,
-      "",
-    ];
-
-    unused.forEach((t) => {
-      lines.push(`・${t.ticketId.slice(0, 8).toUpperCase()} [未使用] 発行:${t.issuedAt}`);
+    AppLogger.info("[TicketService] チケット発行", {
+      userId, ticketId: ticket.ticketId, type,
     });
-    used.forEach((t) => {
-      lines.push(`・${t.ticketId.slice(0, 8).toUpperCase()} [使用済] 使用:${t.usedAt}`);
-    });
 
-    return lines.join("\n");
+    return ticket;
   }
+
+  // ----------------------------------------------------------
+  // check: 保有状況を確認する
+  // ----------------------------------------------------------
+
+  check(userId: string): TicketCheckResult {
+    const tickets = this.ticketRepo.findByUserId(userId);
+    const now     = new Date();
+
+    const activeTickets  = tickets.filter(
+      (t) => t.remainingCount > 0 && new Date(t.expireDate) > now
+    );
+    const expiredTickets = tickets.filter(
+      (t) => t.remainingCount === 0 || new Date(t.expireDate) <= now
+    );
+    const totalRemaining = activeTickets.reduce(
+      (sum, t) => sum + t.remainingCount, 0
+    );
+
+    return { tickets, activeTickets, expiredTickets, totalRemaining };
+  }
+
+  // ----------------------------------------------------------
+  // 管理者コマンド用ユーティリティ
+  // ----------------------------------------------------------
+
+  findUserByShortId(shortId: string): UserEntity | null {
+    return new UserRepository().findByShortId(shortId);
+  }
+}
+
+// ----------------------------------------------------------
+// Result 型
+// ----------------------------------------------------------
+
+interface TicketUseResult {
+  ticket:         TicketEntity;
+  remainingAfter: number;
+}
+
+interface TicketCheckResult {
+  tickets:        TicketEntity[];
+  activeTickets:  TicketEntity[];
+  expiredTickets: TicketEntity[];
+  totalRemaining: number;
 }

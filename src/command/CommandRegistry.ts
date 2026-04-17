@@ -1,33 +1,74 @@
 // =============================================================
-// src/command/BaseCommand.ts
-// コマンドの基底クラス
-// 継承してインスタンス化するだけで CommandRegistry に自動登録される
+// src/command/CommandRegistry.ts
+// コマンドの登録・検索を管理するレジストリ
+//
+// 使い方:
+//   CommandRegistry.register(new HelpCommand());
+//   CommandRegistry.register(new TicketCommand());
+//   // → その後は自動でコマンド名から検索される
 // =============================================================
 
-abstract class BaseCommand {
-  /**
-   * コマンド名（スラッシュなし・小文字）
-   * 例: "ticket", "admin", "help"
-   */
-  abstract readonly name: string;
+class CommandRegistry {
+  private static readonly commands: Map<string, BaseCommand> = new Map();
+
+  // ----------------------------------------------------------
+  // 登録
+  // ----------------------------------------------------------
 
   /**
-   * ヘルプに表示するコマンド説明
-   * 例: "/ticket use <ID> - チケットを使用する"
+   * コマンドをレジストリに登録する
+   * コマンド名の重複時はエラーログを出して後勝ちにする
    */
-  abstract readonly description: string;
+  static register(command: BaseCommand): void {
+    const key = command.name.toLowerCase();
+
+    if (this.commands.has(key)) {
+      AppLogger.warn("[CommandRegistry] コマンド名が重複しています（上書き）", {
+        name: key,
+      });
+    }
+
+    this.commands.set(key, command);
+    AppLogger.info("[CommandRegistry] コマンド登録", { name: key });
+  }
 
   /**
-   * コマンドの実行エントリーポイント
-   * @param event LINE メッセージイベント
-   * @param args  コマンド名以降のトークン列
-   *              例: "/ticket use ABC" → args = ["use", "ABC"]
+   * 複数コマンドをまとめて登録する
    */
-  abstract execute(event: LineMessageEvent, args: string[]): void;
+  static registerAll(commands: BaseCommand[]): void {
+    commands.forEach((cmd) => this.register(cmd));
+  }
+
+  // ----------------------------------------------------------
+  // 検索
+  // ----------------------------------------------------------
 
   /**
-   * 管理者専用コマンドかどうか
-   * true の場合、TextController が実行前に権限チェックを行う
+   * コマンド名でコマンドを検索する
+   * @returns 見つかった BaseCommand、なければ null
    */
-  readonly requiresAdmin: boolean = false;
+  static find(name: string): BaseCommand | null {
+    return this.commands.get(name.toLowerCase()) ?? null;
+  }
+
+  /**
+   * 登録済みコマンドをすべて返す
+   */
+  static getAll(): BaseCommand[] {
+    return Array.from(this.commands.values());
+  }
+
+  /**
+   * 登録済みコマンド数を返す
+   */
+  static count(): number {
+    return this.commands.size;
+  }
+
+  /**
+   * テスト・再初期化用にレジストリをクリアする
+   */
+  static clear(): void {
+    this.commands.clear();
+  }
 }

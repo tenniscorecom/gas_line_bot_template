@@ -1,117 +1,80 @@
 // =============================================================
 // src/app/Main.ts
 // GAS エントリーポイント
-// Webhook リクエストを受け取り EventRouter に渡す
 //
-// ★ 新しいコマンドを追加するときは initCommands() に
-//    new XxxCommand() を1行追加するだけ。
-//    それ以外のファイルは一切変更不要。
+// コマンド追加手順:
+//   1. src/command/commands/XxxCommand.ts を作成
+//   2. initCommands() に new XxxCommand() を1行追加
 // =============================================================
 
-/**
- * コマンドをレジストリに登録する初期化関数
- * doPost の先頭で毎回呼ばれる（GAS はリクエストごとにスコープがリセットされる）
- *
- * ────────────────────────────────────────────────
- *  新コマンド追加手順:
- *   1. src/command/commands/ に XxxCommand.ts を作成
- *   2. BaseCommand を継承し name / description / execute を実装
- *   3. ↓ここに new XxxCommand() を1行追加する
- * ────────────────────────────────────────────────
- */
 function initCommands(): void {
   CommandRegistry.registerAll([
     new HelpCommand(),    // /help
-    new TicketCommand(),  // /ticket
-    new AdminCommand(),   // /admin
-    new ShopCommand(),    // /shop  ← 追加サンプル。不要なら削除してください
-    // new XxxCommand(), ← ここに追加するだけ！
+    new TicketCommand(),  // /ticket use | check | add
+    new UserCommand(),    // /user summary | admin  ※管理者専用
+    // new XxxCommand(), ← 新コマンドはここに追加
   ]);
 }
 
-/**
- * LINE Webhook のエントリーポイント
- * GAS の Web アプリとして公開し、Webhook URL に設定する
- */
+// ----------------------------------------------------------
+// Webhook エントリーポイント
+// ----------------------------------------------------------
+
 function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
   try {
-    // コマンドを初期化（GAS はリクエストごとにスコープがリセットされるため毎回実行）
     initCommands();
 
-    AppLogger.info("[Main] Webhook 受信");
-
-    // リクエストボディをパース
     const body = JSON.parse(e.postData.contents) as LineWebhookBody;
 
-    AppLogger.info("[Main] イベント数", { count: body.events.length });
-
-    // イベントが空の場合（LINE の疎通確認リクエスト）
+    // LINEの疎通確認（events が空）
     if (!body.events || body.events.length === 0) {
-      AppLogger.info("[Main] 疎通確認リクエスト");
-      return ContentService.createTextOutput(
-        JSON.stringify({ status: "ok" })
-      ).setMimeType(ContentService.MimeType.JSON);
+      return jsonResponse({ status: "ok" });
     }
 
-    // イベントルーティング
     EventRouter.route(body.events);
-
-    return ContentService.createTextOutput(
-      JSON.stringify({ status: "ok" })
-    ).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ status: "ok" });
 
   } catch (err) {
     AppLogger.error("[Main] 致命的エラー", { error: String(err) });
-
-    // LINE には常に 200 を返す（再送防止）
-    return ContentService.createTextOutput(
-      JSON.stringify({ status: "error", message: String(err) })
-    ).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ status: "error", message: String(err) });
   }
 }
 
-/**
- * 動作確認用（ブラウザから GET アクセスして疎通確認）
- */
 function doGet(): GoogleAppsScript.Content.TextOutput {
   initCommands();
   const commands = CommandRegistry.getAll().map((c) => c.name);
-  return ContentService.createTextOutput(
-    JSON.stringify({ status: "LINE BOT is running 🚀", commands })
-  ).setMimeType(ContentService.MimeType.JSON);
+  return jsonResponse({ status: "LINE BOT is running 🎾", commands });
 }
 
-/**
- * スクリプトプロパティの初期設定ヘルパー
- * GAS エディタから手動で一度だけ実行する
- */
-function setupProperties(): void {
-  const props = PropertiesService.getScriptProperties();
-  props.setProperties({
-    [CONFIG_KEYS.CHANNEL_ACCESS_TOKEN]: "YOUR_CHANNEL_ACCESS_TOKEN",
-    [CONFIG_KEYS.CHANNEL_SECRET]: "YOUR_CHANNEL_SECRET",
-    [CONFIG_KEYS.SPREADSHEET_ID]: "YOUR_SPREADSHEET_ID",
-    [CONFIG_KEYS.ADMIN_USER_IDS]: "U1234567890,U0987654321",
-  });
-  Logger.log("スクリプトプロパティを設定しました。実際の値に書き換えてください。");
+function jsonResponse(data: Record<string, unknown>): GoogleAppsScript.Content.TextOutput {
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
+// ----------------------------------------------------------
+// 初期セットアップ（GASエディタから手動で一度だけ実行）
+// ----------------------------------------------------------
+
 /**
- * スプレッドシートのシートとヘッダーを初期化する
- * GAS エディタから手動で一度だけ実行する
+ * スプレッドシートにシートとヘッダーを作成する
  */
 function setupSpreadsheet(): void {
   const config = Config.get();
-  const ss = SpreadsheetApp.openById(config.spreadsheetId);
+  const ss     = SpreadsheetApp.openById(config.spreadsheetId);
 
-  const sheetsConfig: Array<{ name: string; headers: string[] }> = [
+  const sheets: Array<{ name: string; headers: string[] }> = [
     {
       name: SHEET_NAMES.USERS,
-      headers: ["userId", "displayName", "followedAt", "isAdmin", "memo"],
+      headers: ["user_id", "display_name", "short_id", "followed_at", "is_admin", "memo"],
     },
     {
       name: SHEET_NAMES.TICKETS,
-      headers: ["ticketId", "userId", "status", "issuedAt", "usedAt"],
+      headers: ["ticket_id", "user_id", "ticket_type", "remaining_count", "expire_date", "created_at"],
+    },
+    {
+      name: SHEET_NAMES.TICKET_LOGS,
+      headers: ["log_id", "user_id", "ticket_id", "action", "count", "remaining_after", "created_at", "note"],
     },
     {
       name: SHEET_NAMES.LOGS,
@@ -119,19 +82,17 @@ function setupSpreadsheet(): void {
     },
   ];
 
-  sheetsConfig.forEach(({ name, headers }) => {
+  sheets.forEach(({ name, headers }) => {
     let sheet = ss.getSheetByName(name);
     if (!sheet) {
       sheet = ss.insertSheet(name);
       Logger.log(`シート "${name}" を作成しました`);
     }
-    // ヘッダー行がなければ書き込む
     if (sheet.getLastRow() === 0) {
       sheet.appendRow(headers);
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
-      Logger.log(`シート "${name}" にヘッダーを設定しました`);
     }
   });
 
-  Logger.log("スプレッドシートのセットアップが完了しました ✅");
+  Logger.log("✅ セットアップ完了");
 }

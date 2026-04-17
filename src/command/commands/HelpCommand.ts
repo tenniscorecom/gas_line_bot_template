@@ -1,88 +1,32 @@
 // =============================================================
-// src/command/commands/TicketCommand.ts
-// /ticket サブコマンド群
-// /ticket use <ID>  - チケットを使用する
-// /ticket check     - 保有チケットを確認する
-// /ticket issue     - チケットを発行する（管理者のみ）
+// src/command/commands/HelpCommand.ts
+// /help コマンド
+// CommandRegistry からコマンド一覧を動的に生成する
 // =============================================================
 
-class TicketCommand extends BaseCommand {
-  readonly name = "ticket";
-  readonly description = "/ticket use <ID> | check - チケットの使用・確認";
+class HelpCommand extends BaseCommand {
+  readonly name = "help";
+  readonly description = "/help - 使用できるコマンド一覧を表示";
   readonly requiresAdmin = false;
 
-  private readonly ticketService: TicketService;
+  execute(event: LineMessageEvent, _args: string[]): void {
+    const allCommands = CommandRegistry.getAll();
 
-  constructor() {
-    super();
-    this.ticketService = new TicketService();
-  }
-
-  execute(event: LineMessageEvent, args: string[]): void {
-    const subCommand = args[0]?.toLowerCase();
-
-    switch (subCommand) {
-      case "use":
-        this.handleUse(event, args);
-        break;
-      case "check":
-        this.handleCheck(event);
-        break;
-      case "issue":
-        this.handleIssue(event);
-        break;
-      default:
-        ReplyService.replyText(
-          event.replyToken,
-          "使い方:\n/ticket use <チケットID>\n/ticket check"
-        );
-    }
-  }
-
-  // ----------------------------------------------------------
-  // Private handlers
-  // ----------------------------------------------------------
-
-  private handleUse(event: LineMessageEvent, args: string[]): void {
-    const userId = event.source.userId;
-    if (!userId) {
-      ReplyService.replyText(event.replyToken, "ユーザーIDを取得できませんでした。");
-      return;
-    }
-    const ticketIdPrefix = args[1];
-    if (!ticketIdPrefix) {
-      ReplyService.replyText(
-        event.replyToken,
-        "チケットIDを指定してください。\n例: /ticket use ABC12345"
-      );
-      return;
-    }
-    const result = this.ticketService.use(userId, ticketIdPrefix);
-    ReplyService.replyText(event.replyToken, result);
-  }
-
-  private handleCheck(event: LineMessageEvent): void {
-    const userId = event.source.userId;
-    if (!userId) {
-      ReplyService.replyText(event.replyToken, "ユーザーIDを取得できませんでした。");
-      return;
-    }
-    const result = this.ticketService.check(userId);
-    ReplyService.replyText(event.replyToken, result);
-  }
-
-  private handleIssue(event: LineMessageEvent): void {
-    const userId = event.source.userId;
-    if (!userId) {
-      ReplyService.replyText(event.replyToken, "ユーザーIDを取得できませんでした。");
-      return;
-    }
     const userService = new UserService();
-    if (!userService.isAdmin(userId)) {
-      ReplyService.replyText(event.replyToken, "このサブコマンドは管理者のみ使用できます。");
-      return;
-    }
-    const result = this.ticketService.issue(userId);
-    ReplyService.replyText(event.replyToken, result);
+    const userId = event.source.userId ?? "";
+    const isAdmin = userService.isAdmin(userId);
+
+    // 管理者でない場合は requiresAdmin=true のコマンドを非表示
+    const visibleCommands = isAdmin
+      ? allCommands
+      : allCommands.filter((cmd) => !cmd.requiresAdmin);
+
+    const lines: string[] = [
+      "📖 コマンド一覧",
+      "",
+      ...visibleCommands.map((cmd) => cmd.description),
+    ];
+
+    ReplyService.replyText(event.replyToken, lines.join("\n"));
   }
 }
