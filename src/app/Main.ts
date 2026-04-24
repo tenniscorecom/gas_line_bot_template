@@ -7,6 +7,10 @@
 //   2. initCommands() に new XxxCommand() を1行追加
 // =============================================================
 
+// エルメの Webhook URL（スクリプトプロパティで管理）
+const LME_WEBHOOK_URL = PropertiesService.getScriptProperties()
+  .getProperty("LME_WEBHOOK_URL") ?? "";
+
 function initCommands(): void {
   CommandRegistry.registerAll([
     new HelpCommand(),    // /help
@@ -22,9 +26,21 @@ function initCommands(): void {
 
 function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
   try {
+    const raw = e.postData.contents;
+
+    // x-line-signature は GAS では e.parameter 経由で取得する
+    // （e.postData.headers は GAS では使用不可）
+    const signature = (e.parameter as Record<string, string>)["x-line-signature"] ?? "";
+
+    // エルメに転送（署名検証より前に転送してエルメ側でも受け取れるようにする）
+    forwardToLme(raw, signature);
+
+    // 署名検証
+    LineSignatureVerifier.verify(e);
+
     initCommands();
 
-    const body = JSON.parse(e.postData.contents) as LineWebhookBody;
+    const body = JSON.parse(raw) as LineWebhookBody;
 
     // LINEの疎通確認（events が空）
     if (!body.events || body.events.length === 0) {
@@ -36,6 +52,7 @@ function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.Tex
 
   } catch (err) {
     AppLogger.error("[Main] 致命的エラー", { error: String(err) });
+    // LINE には常に 200 を返す（再送防止）
     return jsonResponse({ status: "error", message: String(err) });
   }
 }
@@ -53,12 +70,28 @@ function jsonResponse(data: Record<string, unknown>): GoogleAppsScript.Content.T
 }
 
 // ----------------------------------------------------------
+// エルメへの転送
+// ----------------------------------------------------------
+
+function forwardToLme(json: string, signature: string): void {
+  if (!LME_WEBHOOK_URL) {
+    AppLogger.warn("[Main] LME_WEBHOOK_URL が設定されていません。転送をスキップします。");
+    return;
+  }
+
+  UrlFetchApp.fetch(LME_WEBHOOK_URL, {
+    method: "post",
+    contentType: "application/json",
+    payload: json,
+    headers: signature ? { "X-Line-Signature": signature } : {},
+    muteHttpExceptions: true,
+  });
+}
+
+// ----------------------------------------------------------
 // 初期セットアップ（GASエディタから手動で一度だけ実行）
 // ----------------------------------------------------------
 
-/**
- * スプレッドシートにシートとヘッダーを作成する
- */
 function setupSpreadsheet(): void {
   const config = Config.get();
   const ss     = SpreadsheetApp.openById(config.spreadsheetId);
